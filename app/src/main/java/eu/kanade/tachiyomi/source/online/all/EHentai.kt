@@ -446,14 +446,39 @@ class EHentai(
         }
     }
 
-    private fun parseChapterPage(response: Element) = with(response) {
-        select(".gdtm a").map {
-            Pair(it.child(0).attr("alt").toInt(), it.attr("href"))
-        }.plus(
-            select("#gdt a").map {
-                Pair(it.child(0).attr("title").removePrefix("Page ").substringBefore(":").toInt(), it.attr("href"))
-            },
-        ).sortedBy(Pair<Int, String>::first).map { it.second }
+    /**
+     * Parses the gallery page to extract a list of page URLs.
+     * It determines the thumbnail view type ("Minimal", "Compact", or "Large") and
+     * uses the most efficient selector for that view.
+     *
+     * @param response The Jsoup element of the gallery page body.
+     * @return A sorted list of page URLs.
+     */
+    private fun parseChapterPage(response: Element): List<String> {
+        val pageLinks = when {
+            // "Large" or "Extended" view
+            response.selectFirst("#gdt > a") != null -> {
+                response.select("#gdt > a").map { a ->
+                    val divWithTitle = a.selectFirst("div[title]")
+                        ?: throw IOException("Could not find title attribute in large thumbnail view")
+                    val index = divWithTitle.attr("title").substringAfter("Page ").substringBefore(":").toInt()
+                    val url = a.attr("href")
+                    index to url
+                }
+            }
+            // "Minimal" or "Compact" view
+            response.selectFirst(".gdtm a") != null -> {
+                response.select(".gdtm a").map { a ->
+                    val index = a.child(0).attr("alt").toInt()
+                    val url = a.attr("href")
+                    index to url
+                }
+            }
+            else -> emptyList()
+        }
+
+        // Sort by the parsed page index and return only the URLs.
+        return pageLinks.sortedBy { it.first }.map { it.second }
     }
 
     private fun chapterPageCall(np: String): Observable<Response> {
@@ -1217,30 +1242,30 @@ class EHentai(
         ).awaitSuccess().asJsoup()
 
         val body = doc.body()
-        val previews = body
-            .select("#gdt > div > div")
-            .plus(body.select("#gdt > a"))
-            .map {
-                val preview = parseNormalPreview(it)
-                PagePreviewInfo(preview.index, imageUrl = preview.toUrl())
-            }
-            .ifEmpty {
-                body.select("#gdt div a img")
-                    .map {
-                        PagePreviewInfo(
-                            it.attr("alt").toInt(),
-                            imageUrl = it.attr("src"),
-                        )
-                    }
-            }
+
+        // Determine which view is active and use the correct selector
+        val previewElements = when {
+            // "Large" or "Extended" view (like your example)
+            body.selectFirst("#gdt > a") != null -> body.select("#gdt > a")
+            // "Compact" view
+            body.selectFirst(".gdtl") != null -> body.select(".gdtl")
+            // "Minimal" view
+            body.selectFirst(".gdtm") != null -> body.select(".gdtm")
+            else -> emptyList()
+        }
+
+        val previews = previewElements.map { element ->
+            val preview = parseNormalPreview(element)
+            PagePreviewInfo(preview.index, imageUrl = preview.toUrl())
+        }
 
         return PagePreviewPage(
             page = page,
             pagePreviews = previews,
             hasNextPage = doc.select("table.ptt tbody tr td")
-                .last()!!
-                .hasClass("ptdd")
-                .not(),
+                .lastOrNull()
+                ?.selectFirst("a[onclick=return false]")
+                ?.text() == ">",
             pagePreviewPages = doc.select("table.ptt tbody tr td a").asReversed()
                 .firstNotNullOfOrNull { it.text().toIntOrNull() },
         )
@@ -1252,83 +1277,62 @@ class EHentai(
     }
 
     /**
-     * Parse normal previews with regular expressions.
-     * This function handles both "Compact" and "Large" thumbnail layouts from the website.
+     * Parses a thumbnail preview element, handling both "Compact" and "Large" layouts efficiently.
+     *
+     * @param element The Jsoup element representing a single thumbnail container (usually an `<a>` tag).
+     * @return An `EHentaiThumbnailPreview` object containing the parsed data.
+     * @throws IOException if the necessary child elements or attributes cannot be found.
      */
     private fun parseNormalPreview(element: Element): EHentaiThumbnailPreview {
-        // Try to find an 'img' element, which is characteristic of the "Compact" layout.
+        // "Compact" view has an <img> tag with an "alt" attribute for the index.
         val imgElement = element.selectFirst("img")
-
         if (imgElement != null) {
-            // This is the logic for the "Compact" thumbnail view.
-            // In this layout, the <a> tag itself contains the style attribute.
             val index = imgElement.attr("alt").toInt()
-            val styleElement = element
-            val styles = styleElement.attr("style").split(";").mapNotNull { it.trimOrNull() }
-
-            val width = styles.first { it.startsWith("width:") }
-                .removePrefix("width:")
-                .removeSuffix("px")
-                .toInt()
-
-            val height = styles.first { it.startsWith("height:") }
-                .removePrefix("height:")
-                .removeSuffix("px")
-                .toInt()
-
-            val background = styles.first { it.startsWith("background:") }
-                .removePrefix("background:")
-                .split(" ")
-
-            val url = background.first { it.startsWith("url(") }
-                .removePrefix("url(")
-                .removeSuffix(")")
-
-            val widthOffset = background.first { it.startsWith("-") }
-                .removePrefix("-")
-                .removeSuffix("px")
-                .toInt()
-
-            return EHentaiThumbnailPreview(url, width, height, widthOffset, index)
-        } else {
-            // This is the logic for the "Large" thumbnail view.
-            // In this layout, the style and title are on a nested div.
-            val styleElement = element.selectFirst("div > div[title]")
-                ?: throw IOException("Could not find preview element for large view")
-
-            val index = styleElement.attr("title")
-                .removePrefix("Page ")
-                .substringBefore(":")
-                .toInt()
-
-            val styles = styleElement.attr("style").split(";").mapNotNull { it.trimOrNull() }
-
-            val width = styles.first { it.startsWith("width:") }
-                .removePrefix("width:")
-                .removeSuffix("px")
-                .toInt()
-
-            val height = styles.first { it.startsWith("height:") }
-                .removePrefix("height:")
-                .removeSuffix("px")
-                .toInt()
-
-            val background = styles.first { it.startsWith("background:") }
-                .removePrefix("background:")
-                .split(" ")
-
-            val url = background.first { it.startsWith("url(") }
-                .removePrefix("url(")
-                .removeSuffix(")")
-
-            val widthOffset = background.first { it.startsWith("-") }
-                .removePrefix("-")
-                .removeSuffix("px")
-                .toInt()
-
-            return EHentaiThumbnailPreview(url, width, height, widthOffset, index)
+            // In "Compact" view, the style is on the parent <a> tag itself.
+            return parseStyleAndIndex(element, index)
         }
+
+        // "Large" view has the index and style on a nested <div>.
+        val largePreviewDiv = element.selectFirst("div > div[title]")
+            ?: throw IOException("Could not find preview element for large view")
+
+        val index = largePreviewDiv.attr("title")
+            .substringAfter("Page ")
+            .substringBefore(":")
+            .toInt()
+
+        // In "Large" view, the style is on this nested div.
+        return parseStyleAndIndex(largePreviewDiv, index)
     }
+
+    /**
+     * Helper function to parse the 'style' attribute common to all thumbnail types.
+     *
+     * @param styleElement The element that contains the 'style' attribute.
+     * @param index The page index, already determined by the caller.
+     * @return An `EHentaiThumbnailPreview` object.
+     */
+    private fun parseStyleAndIndex(styleElement: Element, index: Int): EHentaiThumbnailPreview {
+        val style = styleElement.attr("style")
+
+        // Use Regex to reliably capture background properties, which is more robust
+        // than string splitting.
+        val backgroundRegex = """width:(\d+)px;height:(\d+)px;background:.*?url\((.+?)\)(?: -(\d+)px \S+ no-repeat)?""".toRegex()
+        val match = backgroundRegex.find(style)
+            ?: throw IOException("Could not parse style attribute: $style")
+
+        val (width, height, url) = match.destructured
+        val widthOffset = match.groupValues.getOrNull(4)?.toIntOrNull() ?: 0
+
+        return EHentaiThumbnailPreview(
+            imageUrl = url,
+            width = width.toInt(),
+            height = height.toInt(),
+            widthOffset = widthOffset,
+            index = index,
+        )
+    }
+
     data class EHentaiThumbnailPreview(
         val imageUrl: String,
         val width: Int,
