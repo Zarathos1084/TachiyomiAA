@@ -14,6 +14,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import eu.kanade.presentation.webview.EhLoginWebViewScreen
+import eu.kanade.presentation.webview.components.CustomCookiesDialog
 import eu.kanade.presentation.webview.components.IgneousDialog
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.ui.base.activity.BaseActivity
@@ -53,26 +54,32 @@ class EhLoginActivity : BaseActivity() {
         }
 
         setComposeContent {
-            var igneous by rememberSaveable {
-                mutableStateOf<String?>(null)
-            }
-            var igneousDialogOpen by rememberSaveable {
+            var customIgneous by rememberSaveable { mutableStateOf<String?>(null) }
+            var customMemberId by rememberSaveable { mutableStateOf<String?>(null) }
+            var customPassHash by rememberSaveable { mutableStateOf<String?>(null) }
+            var customCookiesDialogOpen by rememberSaveable {
                 mutableStateOf(false)
             }
 
             EhLoginWebViewScreen(
                 onUp = { finish() },
-                onPageFinished = { view, url -> onPageFinished(view, url, igneous) },
+                onPageFinished = { view, url ->
+                    onPageFinished(view, url, customIgneous, customMemberId, customPassHash)
+                },
                 onClickRecheckLoginStatus = ::recheckLoginStatus,
                 onClickAlternateLoginPage = ::alternateLoginPage,
                 onClickSkipPageRestyling = ::skipPageRestyling,
-                onClickCustomIgneousCookie = { igneousDialogOpen = true },
+                onClickCustomIgneousCookie = { customCookiesDialogOpen = true },
             )
 
-            if (igneousDialogOpen) {
-                IgneousDialog(
-                    onDismissRequest = { igneousDialogOpen = false },
-                    onIgneousSet = { igneous = it },
+            if (customCookiesDialogOpen) {
+                CustomCookiesDialog(
+                    onDismissRequest = { customCookiesDialogOpen = false },
+                    onSet = { igneous, memberId, passHash ->
+                        customIgneous = igneous.takeIf { it.isNotBlank() }
+                        customMemberId = memberId.takeIf { it.isNotBlank() }
+                        customPassHash = passHash.takeIf { it.isNotBlank() }
+                    },
                 )
             }
         }
@@ -90,7 +97,7 @@ class EhLoginActivity : BaseActivity() {
         loadUrl("https://forums.e-hentai.org/index.php?act=Login&$PARAM_SKIP_INJECT=true")
     }
 
-    private fun onPageFinished(view: WebView, url: String, customIgneous: String?) {
+    private fun onPageFinished(view: WebView, url: String, customIgneous: String?, customMemberId: String?, customPassHash: String?) {
         xLogD(url)
         val parsedUrl = Uri.parse(url)
         if (parsedUrl.host.equals("forums.e-hentai.org", ignoreCase = true)) {
@@ -105,7 +112,7 @@ class EhLoginActivity : BaseActivity() {
             }
         } else if (parsedUrl.host.equals("exhentai.org", ignoreCase = true)) {
             // At ExHentai, check that everything worked out...
-            if (applyExHentaiCookies(url, customIgneous)) {
+            if (applyExHentaiCookies(url, customIgneous, customMemberId, customPassHash)) {
                 exhPreferences.enableExhentai().set(true)
                 setResult(RESULT_OK)
                 finish()
@@ -132,11 +139,11 @@ class EhLoginActivity : BaseActivity() {
     /**
      * Parse cookies at ExHentai
      */
-    private fun applyExHentaiCookies(url: String, customIgneous: String?): Boolean {
+    private fun applyExHentaiCookies(url: String, customIgneous: String?, customMemberId: String?, customPassHash: String?): Boolean {
         getCookies(url)?.let { parsed ->
 
-            var memberId: String? = null
-            var passHash: String? = null
+            var memberId: String? = customMemberId
+            var passHash: String? = customPassHash
             var igneous: String? = customIgneous
 
             if (customIgneous != null) {
@@ -145,8 +152,8 @@ class EhLoginActivity : BaseActivity() {
 
             parsed.forEach {
                 when (it.name.lowercase(Locale.getDefault())) {
-                    MEMBER_ID_COOKIE -> memberId = it.value
-                    PASS_HASH_COOKIE -> passHash = it.value
+                    MEMBER_ID_COOKIE -> memberId = customMemberId ?: it.value
+                    PASS_HASH_COOKIE -> passHash = customPassHash ?: it.value
                     IGNEOUS_COOKIE -> igneous = customIgneous ?: it.value
                 }
             }

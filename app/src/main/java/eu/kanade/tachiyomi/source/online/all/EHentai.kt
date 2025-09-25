@@ -1252,42 +1252,82 @@ class EHentai(
     }
 
     /**
-     * Parse normal previews with regular expressions
+     * Parse normal previews with regular expressions.
+     * This function handles both "Compact" and "Large" thumbnail layouts from the website.
      */
     private fun parseNormalPreview(element: Element): EHentaiThumbnailPreview {
+        // Try to find an 'img' element, which is characteristic of the "Compact" layout.
         val imgElement = element.selectFirst("img")
-        val index = imgElement?.attr("alt")?.toInt()
-            ?: element.child(0).attr("title").removePrefix("Page ").substringBefore(":").toInt()
-        val styleElement = if (imgElement != null) {
-            element
+
+        if (imgElement != null) {
+            // This is the logic for the "Compact" thumbnail view.
+            // In this layout, the <a> tag itself contains the style attribute.
+            val index = imgElement.attr("alt").toInt()
+            val styleElement = element
+            val styles = styleElement.attr("style").split(";").mapNotNull { it.trimOrNull() }
+
+            val width = styles.first { it.startsWith("width:") }
+                .removePrefix("width:")
+                .removeSuffix("px")
+                .toInt()
+
+            val height = styles.first { it.startsWith("height:") }
+                .removePrefix("height:")
+                .removeSuffix("px")
+                .toInt()
+
+            val background = styles.first { it.startsWith("background:") }
+                .removePrefix("background:")
+                .split(" ")
+
+            val url = background.first { it.startsWith("url(") }
+                .removePrefix("url(")
+                .removeSuffix(")")
+
+            val widthOffset = background.first { it.startsWith("-") }
+                .removePrefix("-")
+                .removeSuffix("px")
+                .toInt()
+
+            return EHentaiThumbnailPreview(url, width, height, widthOffset, index)
         } else {
-            element.child(0)
+            // This is the logic for the "Large" thumbnail view.
+            // In this layout, the style and title are on a nested div.
+            val styleElement = element.selectFirst("div > div[title]")
+                ?: throw IOException("Could not find preview element for large view")
+
+            val index = styleElement.attr("title")
+                .removePrefix("Page ")
+                .substringBefore(":")
+                .toInt()
+
+            val styles = styleElement.attr("style").split(";").mapNotNull { it.trimOrNull() }
+
+            val width = styles.first { it.startsWith("width:") }
+                .removePrefix("width:")
+                .removeSuffix("px")
+                .toInt()
+
+            val height = styles.first { it.startsWith("height:") }
+                .removePrefix("height:")
+                .removeSuffix("px")
+                .toInt()
+
+            val background = styles.first { it.startsWith("background:") }
+                .removePrefix("background:")
+                .split(" ")
+
+            val url = background.first { it.startsWith("url(") }
+                .removePrefix("url(")
+                .removeSuffix(")")
+
+            val widthOffset = background.first { it.startsWith("-") }
+                .removePrefix("-")
+                .removeSuffix("px")
+                .toInt()
+
+            return EHentaiThumbnailPreview(url, width, height, widthOffset, index)
         }
-        val styles = styleElement.attr("style").split(";").mapNotNull { it.trimOrNull() }
-        val width = styles.first { it.startsWith("width:") }
-            .removePrefix("width:")
-            .removeSuffix("px")
-            .toInt()
-
-        val height = styles.first { it.startsWith("height:") }
-            .removePrefix("height:")
-            .removeSuffix("px")
-            .toInt()
-
-        val background = styles.first { it.startsWith("background:") }
-            .removePrefix("background:")
-            .split(" ")
-
-        val url = background.first { it.startsWith("url(") }
-            .removePrefix("url(")
-            .removeSuffix(")")
-
-        val widthOffset = background.first { it.startsWith("-") }
-            .removePrefix("-")
-            .removeSuffix("px")
-            .toInt()
-
-        return EHentaiThumbnailPreview(url, width, height, widthOffset, index)
     }
     data class EHentaiThumbnailPreview(
         val imageUrl: String,
